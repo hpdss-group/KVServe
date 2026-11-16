@@ -15,6 +15,7 @@ Key design decisions (learned from conversation log):
 
 import json
 import os
+import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -188,6 +189,14 @@ class CompressedKVConnector(KVConnectorBase_V1):
         # Built lazily on first use to avoid import overhead at init time.
         self._compressor: Optional[Any] = None
         self._compression_cfg = cfg.kv_connector_extra_config.get("compression")
+        self._controller_enabled = (
+            isinstance(self._compression_cfg, dict)
+            and self._compression_cfg.get("mode") == "controller"
+        )
+        # A completed transport event carries transfer_id; the adapter tracks
+        # controller contexts using scheduler request_id.
+        self._controller_send_rids: dict[str, str] = {}
+        self._controller_send_rids_lock = threading.Lock()
 
         if role == KVConnectorRole.WORKER:
             from vllm.distributed.parallel_state import (
@@ -202,6 +211,10 @@ class CompressedKVConnector(KVConnectorBase_V1):
             self._tp_size = tp_size
             self._transport = self._build_transport(
                 cfg, local_rank=local_rank, channel_rank=tp_rank)
+            if self.is_producer and self._controller_enabled:
+                self._transport.set_send_completion_observer(
+                    self._on_send_completed
+                )
             logger.info(
                 "[CompressedKVConnector] WORKER init: is_producer=%s "
                 "local_rank=%d tp_rank=%d tp_size=%d compression=%s",
@@ -428,11 +441,17 @@ class CompressedKVConnector(KVConnectorBase_V1):
 
             compressor = self._get_compressor()
             if compressor is not None:
-                t0 = time.monotonic()
                 compressed = compressor.compress(stacked, rid)
                 if compressed is not None:
                     wire = build_wire(compressed, _max_nccl_chunk_bytes())
                     send_names = add_sentinel(layer_names)
+                    if self._controller_enabled:
+                        # Bound the map if a transport failure omits completion.
+                        with self._controller_send_rids_lock:
+                            if len(self._controller_send_rids) >= 8192:
+                                self._controller_send_rids.pop(
+                                    next(iter(self._controller_send_rids)))
+                            self._controller_send_rids[transfer_id] = rid
                     logger.info(
                         "[Connector][RID][SEND] sending compressed rid=%s transfer_id=%s "
                         "layers=%d body_chunks=%d aux_tensors=%d payload_bytes=%d",
@@ -448,8 +467,9 @@ class CompressedKVConnector(KVConnectorBase_V1):
                         original_bytes=stacked.numel() * stacked.element_size(),
                         compressed_bytes=wire.nbytes,
                     )
-                    elapsed_ms = (time.monotonic() - t0) * 1e3
-                    compressor.update_controller(rid, elapsed_ms)
+                    # Do NOT update the bandit here: send_bundle only enqueues
+                    # the asynchronous transfer. Completion is observed by
+                    # _on_send_completed in the transport's completion thread.
                     logger.debug(
                         "[Connector] Sent compressed KV for %s "
                         "(%d layers, %.2f MB → %.2f MB)",
@@ -457,9 +477,13 @@ class CompressedKVConnector(KVConnectorBase_V1):
                         stacked.numel() * stacked.element_size() / 1e6,
                         wire.nbytes / 1e6)
                     continue
-                logger.warning(
-                    "[Connector] Compression returned None for %s, "
-                    "falling back to raw send", rid)
+                if self._controller_enabled:
+                    logger.debug(
+                        "[Connector] Controller chose raw KV transfer for %s", rid)
+                else:
+                    logger.warning(
+                        "[Connector] Compression returned None for %s, "
+                        "falling back to raw send", rid)
 
             logger.info(
                 "[Connector][RID][SEND] sending raw rid=%s transfer_id=%s layers=%d shape=%s",
@@ -628,6 +652,16 @@ class CompressedKVConnector(KVConnectorBase_V1):
         return False, None
 
     # ── Internal ───────────────────────────────────────────────────────────
+
+    def _on_send_completed(self, row: dict) -> None:
+        """Run only after NCCL completion, without blocking the request loop."""
+        compressor = self._compressor
+        if compressor is None:
+            return
+        transfer_id = row.get("request_id")
+        with self._controller_send_rids_lock:
+            rid = self._controller_send_rids.pop(transfer_id, None)
+        compressor.observe_transport(row, request_id=rid)
 
     def _get_compressor(self):
         """Lazily build KVCompressionAdapter on first use."""

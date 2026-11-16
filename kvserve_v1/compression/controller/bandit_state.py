@@ -7,6 +7,7 @@ Maintains statistics for ε-greedy bandit:
 """
 
 import json
+import math
 from typing import Dict, Tuple
 from pathlib import Path
 
@@ -31,6 +32,8 @@ class BanditStateManager:
             alpha: EWMA learning rate (0 < alpha <= 1)
                    Higher alpha gives more weight to recent observations
         """
+        if not (math.isfinite(alpha) and 0.0 < alpha <= 1.0):
+            raise ValueError('EWMA alpha must be in (0, 1]')
         self.alpha = alpha
         self.state: Dict[Tuple[int, int, str], Tuple[int, float]] = {}
     
@@ -73,6 +76,8 @@ class BanditStateManager:
             profile_id: Profile identifier
             delta_obs: Observed residual (T_obs - T_hat)
         """
+        if not math.isfinite(delta_obs):
+            return
         key = (bucket_id, interval_id, profile_id)
         N, delta_bar_old = self.state.get(key, (0, 0.0))
         

@@ -246,9 +246,10 @@ kv_port + tp_rank
 
 ## Choose a Compression Mode
 
-KVServe supports three compression modes. The recommended path is controller
-mode: the online selector chooses the **optimal compression profile** for the current
-bandwidth, SLO, and quality budget. 
+KVServe supports three compression modes. **Controller mode** is an online
+selection prototype that chooses among offline-profiled candidates under
+bandwidth, SLO, and quality constraints. The controller uses an analytical
+cost model, a lightweight bandit, and optional runtime bandwidth estimates.
 
 For quick experiments, use the built-in
 **default mode**. For research or deployment-specific tuning, pass a custom
@@ -258,7 +259,9 @@ pipeline.
 kv_connector_extra_config={"compression": "default"}
 ```
 
-**Controller mode** uses a profile library:
+**Controller mode** requires an offline-generated profile library. See the
+[online controller guide](docs/online-controller.md) for library generation,
+feedback semantics, safety fallbacks, and a CPU-only demonstration:
 
 ```python
 kv_connector_extra_config={

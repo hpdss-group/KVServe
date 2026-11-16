@@ -98,6 +98,8 @@ class NcclTransport:
         self.nccl = NCCLLibrary()
         self._stats_path = os.environ.get("KVSERVE_TRANSPORT_STATS_PATH")
         self._stats_lock = threading.Lock()
+        # Completed-send observer runs on the existing async completion thread.
+        self._send_completion_observer = None
 
         self._ctx = zmq.Context()
 
@@ -175,6 +177,10 @@ class NcclTransport:
                 "[NcclTransport] Consumer staging credits: capacity=%d bytes "
                 "(channel_rank=%d)",
                 self._recv_capacity_bytes, channel_rank)
+
+    def set_send_completion_observer(self, observer) -> None:
+        """Optional non-blocking observer called after NCCL completion."""
+        self._send_completion_observer = observer
 
     # ── Producer-side ──────────────────────────────────────────────────────
 
@@ -301,6 +307,15 @@ class NcclTransport:
                 row["total_s"] = (
                     time.monotonic_ns() - row.pop("_enqueued_ns")) / 1e9
                 self._record_stat(row)
+                observer = self._send_completion_observer
+                if observer is not None:
+                    try:
+                        observer(dict(row))
+                    except Exception as observer_exc:
+                        logger.warning(
+                            "[NcclTransport] completion observer failed: %s",
+                            observer_exc,
+                        )
             except Exception as exc:
                 logger.error(
                     "[NcclTransport] send completion error for %s: %s",

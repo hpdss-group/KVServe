@@ -20,6 +20,7 @@ and quantization tensors GPU-resident for NCCL transfer.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -83,8 +84,12 @@ class KVCompressionAdapter:
         # controller-mode state
         self._controller: Optional[Any] = None
         self._service_cfg: dict = {}
-        # request_id → (inserted_time, select_profile context)
+        self._bandwidth_estimator: Optional[Any] = None
+        self._feedback_mode = "manual"
+        # request_id -> (compression start time, selection context)
         self._last_contexts: dict[str, tuple[float, dict]] = {}
+        self._context_lock = threading.RLock()
+        self._last_context_prune = 0.0
 
         # (manager, config) cache keyed by stable JSON repr of cfg_dict
         self._manager_cache: dict[str, tuple["CompressionManager", "CompressionConfig"]] = {}
@@ -126,10 +131,29 @@ class KVCompressionAdapter:
             profile_library=library,
             epsilon=spec.get("epsilon", 0.1),
             alpha=spec.get("alpha", 0.2),
+            seed=spec.get("seed"),
+            violation_threshold=spec.get("violation_threshold", 3),
+            violation_window=spec.get("violation_window", 10),
+            cooldown_s=spec.get("cooldown_s", 60.0),
+            min_improvement=spec.get("min_improvement", 0.0),
         )
         self._service_cfg = spec.get("service_config", {})
-        logger.info("[KVCompressionAdapter] controller mode: library=%s epsilon=%.2f",
-                    spec["library_path"], spec.get("epsilon", 0.1))
+        from kvserve_v1.compression.controller.bandwidth import BandwidthEstimator
+        self._bandwidth_estimator = BandwidthEstimator(
+            float(self._service_cfg.get("bandwidth_mbps", 10_000.0)),
+            alpha=float(spec.get("bandwidth_ewma_alpha", 0.25)),
+            min_samples=int(spec.get("bandwidth_min_samples", 2)),
+        )
+        # "send_proxy" uses a completed send + offline decode estimate; it is
+        # never reported as measured request JCT or used for SLO violations.
+        self._feedback_mode = spec.get("feedback_mode", "send_proxy")
+        if self._feedback_mode not in ("send_proxy", "manual"):
+            raise ValueError("feedback_mode must be 'send_proxy' or 'manual'")
+        logger.info(
+            "[KVCompressionAdapter] controller library=%s epsilon=%.2f feedback=%s",
+            spec["library_path"], spec.get("epsilon", 0.1),
+            self._feedback_mode,
+        )
 
     def _make_config(self, cfg_dict: dict) -> "CompressionConfig":
         from kvserve_v1.compression.compression_manager import CompressionConfig
@@ -280,33 +304,97 @@ class KVCompressionAdapter:
         kv_dim = self._num_kv_heads * self._head_size
         return result.contiguous().view(num_layers, 2, -1, kv_dim)
 
-    def update_controller(self, request_id: str, observed_latency_ms: float) -> None:
-        """Feed observed transfer latency back to the bandit (controller mode only)."""
+    def update_controller(
+        self, request_id: str, observed_latency_ms: float,
+        *, actual_jct: bool = True,
+    ) -> None:
+        """Feed a *completed* latency observation, never enqueue latency.
+
+        Real request JCT can be supplied by an external router; sender-side
+        transport proxies use actual_jct=False (no SLO cooldown).
+        """
         if self._controller is None:
             return
-        entry = self._last_contexts.pop(request_id, None)
+        with self._context_lock:
+            entry = self._last_contexts.pop(request_id, None)
         if entry is not None:
             _, ctx = entry
-            self._controller.update(ctx, observed_latency_ms)
+            self._controller.update(
+                ctx, observed_latency_ms, actual_jct=actual_jct
+            )
+
+    def observe_transport(self, row: dict, request_id: Optional[str] = None) -> None:
+        """Consume the asynchronous NCCL completion callback, O(1) per send.
+
+        The NCCL measurement updates the effective bandwidth even for raw
+        sends. Optional sender-proxy residuals are only learned when the
+        offline profile supplies a measured decoder throughput.
+        """
+        if self._controller is None:
+            return
+        if self._bandwidth_estimator is not None:
+            self._bandwidth_estimator.observe(
+                int(row.get("payload_bytes", 0)),
+                float(row.get("nccl_s", 0.0)),
+            )
+        if not request_id or self._feedback_mode != "send_proxy":
+            return
+        with self._context_lock:
+            entry = self._last_contexts.get(request_id)
+        if entry is None:
+            return
+        start_time, ctx = entry
+        profile = self._controller.library.get_profile(ctx["profile_id"])
+        if profile is None:
+            return
+        decoder_mibps = profile.performance_metrics.get("decode_speed_mbps")
+        if (decoder_mibps is None or not isinstance(decoder_mibps, (int, float))
+                or decoder_mibps <= 0):
+            return
+        # Include compress preparation + async enqueue + queue + NCCL GPU
+        # completion; the receiver's real decode is unavailable on P, so
+        # estimate only its isolated cost from offline measurements.
+        observed_ms = (
+            (time.monotonic() - start_time) * 1000.0
+            + ctx["T_model_ms"]
+            + (ctx["V_bytes"] / (1024.0 * 1024.0))
+            / decoder_mibps * 1000.0
+        )
+        self.update_controller(request_id, observed_ms, actual_jct=False)
 
     def get_controller_stats(self) -> Optional[dict]:
-        """Return OnlineController statistics, or None if not in controller mode."""
+        """Return online decision and bandwidth diagnostics."""
         if self._controller is None:
             return None
-        return self._controller.get_statistics()
+        stats = self._controller.get_statistics()
+        stats.update(self._bandwidth_estimator.stats())
+        with self._context_lock:
+            stats["pending_feedback"] = len(self._last_contexts)
+        stats["feedback_mode"] = self._feedback_mode
+        return stats
 
     # ── Controller-mode internals ──────────────────────────────────────────
 
     _CONTEXT_TTL_S: float = 300.0  # drop contexts older than 5 minutes
 
     def _evict_stale_contexts(self) -> None:
-        cutoff = time.monotonic() - self._CONTEXT_TTL_S
-        stale = [rid for rid, (ts, _) in self._last_contexts.items() if ts < cutoff]
-        for rid in stale:
-            self._last_contexts.pop(rid)
-        if stale:
-            logger.warning("[KVCompressionAdapter] evicted %d stale controller "
-                           "contexts (TTL=%.0fs)", len(stale), self._CONTEXT_TTL_S)
+        with self._context_lock:
+            now = time.monotonic()
+            if now - self._last_context_prune < 5.0 and len(self._last_contexts) <= 4096:
+                return
+            self._last_context_prune = now
+            cutoff = now - self._CONTEXT_TTL_S
+            stale = [
+                rid for rid, (ts, _) in self._last_contexts.items() if ts < cutoff
+            ]
+            for rid in stale:
+                self._last_contexts.pop(rid, None)
+            # Protect long-running serving from unbounded outstanding state.
+            while len(self._last_contexts) > 4096:
+                self._last_contexts.pop(next(iter(self._last_contexts)))
+            if stale:
+                logger.debug("[KVCompressionAdapter] dropped %d expired contexts",
+                             len(stale))
 
     def _compress_controller(
         self,
@@ -315,26 +403,31 @@ class KVCompressionAdapter:
         meta: dict,
     ) -> Optional["CompressedKVData"]:
         V_bytes = float(stacked_6d.numel() * stacked_6d.element_size())
-        B_mbps = float(self._service_cfg.get("bandwidth_mbps", 10_000.0))
+        B_mbps = self._bandwidth_estimator.get()
         T_model_ms = float(self._service_cfg.get("t_model_ms", 0.0))
         T_SLO_ms = float(self._service_cfg.get("slo_ms", float("inf")))
         acc_req = float(self._service_cfg.get("accuracy_requirement", 0.9))
+        workload_id = self._service_cfg.get("workload_id")
 
         profile, context = self._controller.select_profile(
-            V_bytes, B_mbps, T_model_ms, T_SLO_ms, acc_req)
-        self._last_contexts[request_id] = (time.monotonic(), context)
-        self._evict_stale_contexts()
-
+            V_bytes, B_mbps, T_model_ms, T_SLO_ms, acc_req,
+            workload_id=workload_id,
+        )
         if profile is None:
-            logger.debug("[KVCompressionAdapter] controller: no compression for %s "
+            logger.debug("[KVCompressionAdapter] controller: raw fallback for %s "
                          "(reason=%s)", request_id, context.get("reason"))
             return None
 
-        # Embed the selected profile's config so the consumer can decompress
-        # without needing its own controller state.
+        # Independent P/D workers decode from the in-band profile config.
         meta["ctrl_profile_cfg"] = profile.compression_config
+        meta["ctrl_profile_id"] = profile.profile_id
 
         manager, cfg = self._get_cached_manager(profile.compression_config)
+        # Start proxy timing *after* first-use manager construction. That
+        # construction may compile kernels and must not bias bandit learning.
+        with self._context_lock:
+            self._last_contexts[request_id] = (time.monotonic(), context)
+            self._evict_stale_contexts()
         logger.debug("[KVCompressionAdapter] controller: profile=%s for %s",
                      profile.profile_id, request_id)
         return manager.compress_all_layers(
