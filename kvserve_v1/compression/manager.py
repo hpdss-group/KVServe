@@ -22,10 +22,10 @@ from __future__ import annotations
 import json
 import threading
 import time
+from logging import getLogger as init_logger
 from typing import TYPE_CHECKING, Any, Optional
 
 import torch
-from vllm.logger import init_logger
 
 if TYPE_CHECKING:
     from kvserve_v1.compression.compression_manager import CompressedKVData, CompressionConfig, CompressionManager

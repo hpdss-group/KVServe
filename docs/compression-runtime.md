@@ -144,6 +144,45 @@ Configure `pipeline=["codec"]` for lossless ANS-only. Head profiles include TP
 slicing and replicated KV-head mappings; their compatibility with the fused
 path depends on the section and geometry checks above.
 
+## Fixed modular operator profiles
+
+The default runtime keeps the optimized Hadamard/quantizer/ANS path. To select
+operators from KVServe's existing modular library at startup, provide a fixed
+`operator_profile` under the compression configuration:
+
+```json
+{
+  "compression": {
+    "enable-compression-pipeline": true,
+    "logical_blocks_per_chunk": 64,
+    "slot_count": 2,
+    "operator_profile": {
+      "pipeline": ["transformer", "quantizer", "codec"],
+      "transformer_config": {"transform_type": "dct", "seed": 123},
+      "quantizer_config": {
+        "impl": "centered_codebook",
+        "key_bits": 3,
+        "value_bits": 3
+      },
+      "codec_config": {"codec_type": "bitpack", "bitpack_bits": 3}
+    }
+  }
+}
+```
+
+This is a **startup-fixed selection**, not the online controller. The
+`operator_profile` path uses the standard (non-fused) backend, independent
+per-slot CUDA streams and the existing operators. Supported operators depend
+on the installed optional dependencies; the GPU regression suite covers DCT,
+Haar, centered-codebook quantization, BitPack and nvCOMP. A codec-only profile
+can be lossless. Quantization is lossy and requires model-quality validation.
+
+The modular adapter currently requires uniform, dense BF16 attention KV with
+equal K/V head sizes, a single FullAttention group and `LBHNC`/`HND` layout.
+It does not support leased output banks or the fused backend. Both peers must
+use the same operator configuration and compatible runtime code; the modular
+wire profile is distinct from the default runtime's profile.
+
 ## Ownership and compatibility
 
 The adapter must fence the source cache before encode, wait for encode before

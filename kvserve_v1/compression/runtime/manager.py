@@ -298,6 +298,8 @@ class CompressionRuntime:
                 pipeline.identity_orders = identity
             self._metadata_initialized = True
         config = asdict(self.config)
+        if config.get("operator_profile") is None:
+            config.pop("operator_profile", None)
         for key in ("score_path", "slot_count"):
             config.pop(key, None)
         layout_description = asdict(self.layout)

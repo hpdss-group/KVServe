@@ -80,6 +80,8 @@ class CompressionMemoryPlan:
     retained_driver_bytes: int
     guard_bytes: int
     reserved_bytes: int
+    tp_size: int = 1
+    tp_rank: int = 0
 
 
 class _AuditAllocation:

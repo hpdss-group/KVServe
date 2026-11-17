@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from logging import getLogger as init_logger
 from typing import Any, Literal
@@ -87,6 +88,8 @@ class CompressionConfig:
     slot_count: int = 2
     logical_blocks_per_chunk: int = 1
     pipeline: tuple[str, ...] = ("transformer", "quantizer", "codec")
+    # Optional fixed configuration for the existing modular operator library.
+    operator_profile: dict[str, Any] | None = None
 
     @property
     def available(self) -> bool:
@@ -150,6 +153,42 @@ class CompressionConfig:
 
         normalized = dict(raw)
         normalized.pop("enable-compression-pipeline")
+        profile = normalized.get("operator_profile")
+        if profile is not None:
+            if not isinstance(profile, dict) or profile.get("mode") == "controller":
+                raise ValueError(
+                    "operator_profile must be a fixed operator configuration"
+                )
+            profile = copy.deepcopy(profile)
+            stages = profile.get("pipeline")
+            if not isinstance(stages, (tuple, list)) or not stages:
+                raise ValueError("operator_profile must specify a non-empty pipeline")
+            if any(
+                stage not in ("transformer", "quantizer", "codec") for stage in stages
+            ):
+                raise ValueError("Unsupported modular operator stage")
+            if "pipeline" in normalized and tuple(normalized["pipeline"]) != tuple(
+                stages
+            ):
+                raise ValueError("The runtime and operator pipelines must match")
+            if profile.get("enabled", True) is not True:
+                raise ValueError("operator_profile must be enabled")
+            if (
+                type(profile.get("min_compress_size", 0)) is not int
+                or profile.get("min_compress_size", 0) < 0
+            ):
+                raise ValueError(
+                    "operator_profile min_compress_size must be nonnegative"
+                )
+            for stage in stages:
+                if profile.get(f"{stage}_config") is None:
+                    profile[f"{stage}_config"] = {}
+                if not isinstance(profile[f"{stage}_config"], dict):
+                    raise TypeError(
+                        f"operator_profile {stage}_config must be an object"
+                    )
+            normalized["pipeline"] = stages
+            normalized["operator_profile"] = profile
         if "pipeline" in normalized:
             normalized["pipeline"] = tuple(normalized["pipeline"])
         config = cls(enabled=True, transport="compression", **normalized)
