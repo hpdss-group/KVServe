@@ -141,6 +141,8 @@ class MooncakeStoreCompressionAdapter:
             raise ValueError("runtime must be a planned KVServe CompressionRuntime")
         if not getattr(runtime, "slots", None):
             raise ValueError("runtime has no compression slots")
+        if not callable(getattr(runtime, "data_bytes", None)):
+            raise ValueError("Mooncake Store requires a runtime with decoded byte counts")
         self.runtime = runtime
         # vLLM allocates/registers cache tensors after connector planning;
         # CompressionRuntime computes the peer profile when those caches bind.
@@ -399,4 +401,3 @@ class MooncakeStoreCompressionAdapter:
         if self._profile is None:
             raise RuntimeError("Bind the vLLM KV caches before Store compression")
         return self._profile
-

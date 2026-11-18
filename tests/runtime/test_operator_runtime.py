@@ -1,6 +1,7 @@
 """Fixed operator profiles through the public paged-runtime API."""
 
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -11,6 +12,14 @@ from kvserve_v1.compression.runtime import (
     build_memory_plan,
     create_runtime,
 )
+
+
+def test_store_requires_decoded_byte_counts_before_allocating_buffers():
+    from kvserve_v1.integrations.mooncake_store import MooncakeStoreCompressionAdapter
+
+    runtime = SimpleNamespace(plan=object(), slots=[object()])
+    with pytest.raises(ValueError, match="decoded byte counts"):
+        MooncakeStoreCompressionAdapter(runtime)
 
 
 def _config(profile, **kwargs):

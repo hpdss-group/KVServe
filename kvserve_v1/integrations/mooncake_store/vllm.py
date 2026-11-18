@@ -123,4 +123,3 @@ def create_runtime_from_vllm(
         blocks_per_logical,
         device or torch.device("cuda", torch.cuda.current_device()),
     )
-

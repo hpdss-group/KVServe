@@ -183,6 +183,15 @@ It does not support leased output banks or the fused backend. Both peers must
 use the same operator configuration and compatible runtime code; the modular
 wire profile is distinct from the default runtime's profile.
 
+## Mooncake Store adapter
+
+`kvserve_v1.integrations.mooncake_store` prepares a payload and manifest for
+each K/V part and restores those objects into the bound KV cache. The connector
+owns the underlying Store calls and slot lifetime. The adapter requires decoded
+byte accounting from the standard runtime. Use the standard codec-only ANS
+pipeline for lossless Store transfers. The modular `operator_profile` runtime
+currently supports P/D transfer.
+
 ## Ownership and compatibility
 
 The adapter must fence the source cache before encode, wait for encode before
