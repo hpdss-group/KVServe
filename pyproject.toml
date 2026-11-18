@@ -20,7 +20,7 @@ runtime-fused-cu12 = ["torch>=2.6", "numpy", "ninja>=1.11", "nvidia-nvcomp-cu12=
 runtime-fused-cu13 = ["torch>=2.6", "numpy", "ninja>=1.11", "nvidia-nvcomp-cu13==6.0.0.12"]
 fused = ["tilelang==0.1.9", "scipy>=1.10"]
 bitpack = ["torch>=2.6", "triton>=3.2"]
-operators = ["torch>=2.6", "triton>=3.2"]
+operators = ["torch>=2.6", "triton>=3.2", "pandas"]
 
 [tool.setuptools.packages.find]
 where = ["."]
