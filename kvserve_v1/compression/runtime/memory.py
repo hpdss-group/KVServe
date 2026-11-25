@@ -163,7 +163,7 @@ def _probe_operators(
                 decoded = torch.empty_like(source)
                 output_array = nvcomp.as_array(output, cuda_stream=stream.cuda_stream)
                 decoded_array = nvcomp.as_array(decoded, cuda_stream=stream.cuda_stream)
-                encoded = codec.compress(
+                encoded = codec.encode(
                     source_array,
                     out=output_array,
                     compression_config=compression_configs[u8_bytes],
@@ -173,7 +173,7 @@ def _probe_operators(
                 encoded_array = nvcomp.as_array(
                     encoded_view, cuda_stream=stream.cuda_stream
                 )
-                codec.decompress(
+                codec.decode(
                     encoded_array,
                     out=decoded_array,
                     decompression_config=decompression_configs[u8_bytes],
