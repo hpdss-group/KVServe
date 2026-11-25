@@ -8,6 +8,7 @@ network reads or slot reuse. No vLLM import or implicit network operation occurs
 from .config import CompressionConfig
 from .manager import CompressionRuntime
 from .memory import build_memory_plan as _build_memory_plan
+from .representation import ChunkIO
 from .spec import CacheSpec
 
 API_VERSION = 1
@@ -19,6 +20,9 @@ def build_memory_plan(config, *args, **kwargs):
 
         return build_operator_plan(config, *args, **kwargs)
     return _build_memory_plan(config, *args, **kwargs)
+
+
+resource_requirements = build_memory_plan
 
 
 def create_runtime(*args, **kwargs):
@@ -36,8 +40,10 @@ def create_runtime(*args, **kwargs):
 __all__ = [
     "API_VERSION",
     "CacheSpec",
+    "ChunkIO",
     "CompressionConfig",
     "CompressionRuntime",
     "build_memory_plan",
     "create_runtime",
+    "resource_requirements",
 ]

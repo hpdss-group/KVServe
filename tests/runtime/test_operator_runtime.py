@@ -8,10 +8,25 @@ import torch
 
 from kvserve_v1.compression.runtime import (
     CacheSpec,
+    ChunkIO,
     CompressionConfig,
     build_memory_plan,
     create_runtime,
 )
+
+
+@pytest.mark.parametrize("size,version", [(1 << 16, 1), (1 << 32, 2)])
+def test_chunk_descriptor_preserves_store_and_large_transfer_lengths(size, version):
+    from kvserve_v1.compression.runtime.representation import (
+        HEADER_BYTES,
+        StoreManifest,
+    )
+
+    manifest = StoreManifest(0, size, size, 0, 0, bytes(32))
+    descriptor = manifest.encode()
+    assert descriptor[8] == version
+    assert (len(descriptor) == HEADER_BYTES) == (version == 1)
+    assert StoreManifest.decode(descriptor) == manifest
 
 
 def test_store_requires_decoded_byte_counts_before_allocating_buffers():
@@ -87,24 +102,18 @@ def test_modular_operator_profiles_restore_paged_kv_on_parallel_slots(
         consumer.bind_kv_caches(target, dict.fromkeys(specs, 0))
         assert producer.wire_profile == consumer.wire_profile
 
+        source_io, target_io = ChunkIO(producer), ChunkIO(consumer)
+
         def transfer(part):
-            encoded = producer.encode(
-                part, [[2, 0]], part, valid_tokens_by_group={0: 31}
-            )
-            encoded.event.synchronize()
-            consumer.slots[part].arena_a[: encoded.codec_bytes].copy_(
-                producer.slots[part].arena_a[: encoded.codec_bytes]
+            chunk = source_io.compress(source_io.plan(part, [[2, 0]], part, {0: 31}))
+            lengths = tuple(length for _, length in chunk.buffers)
+            (payload_bytes, _, _) = lengths
+            consumer.slots[part].arena_a[:payload_bytes].copy_(
+                producer.slots[part].arena_a[:payload_bytes]
             )
             torch.cuda.synchronize()
-            event = consumer.decode(
-                part,
-                [[1, 3]],
-                part,
-                encoded.codec_bytes,
-                encoded.u8_bytes,
-                valid_tokens_by_group={0: 31},
-            )
-            event.synchronize()
+            plan = target_io.plan(part, [[1, 3]], part, {0: 31})
+            target_io.decompress(plan, lengths, chunk.descriptor).synchronize()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             list(pool.map(transfer, (0, 1)))

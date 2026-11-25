@@ -11,6 +11,7 @@ import torch
 
 from kvserve_v1.compression.runtime import (
     CacheSpec,
+    ChunkIO,
     CompressionConfig,
     CompressionRuntime,
     build_memory_plan,
@@ -179,20 +180,23 @@ def test_peer_buffers_restore_layers_blocks_and_partial_tail(
         target.fill_(-9)
     torch.accelerator.synchronize()
     count = (tokens + block_size - 1) // block_size
+    source_io, target_io = ChunkIO(producer), ChunkIO(consumer)
     for part in (0, 1):
-        encoded = producer.encode(
-            part, [[2, 0][:count]], part, valid_tokens_by_group={0: tokens}
+        chunk = source_io.compress(
+            source_io.plan(part, [[2, 0][:count]], part, {0: tokens})
         )
-        encoded.event.synchronize()
-        _copy_wire(producer, consumer, encoded, part, tokens)
-        consumer.decode(
-            1 - part,
-            [[1, 3][:count]],
-            part,
-            encoded.codec_bytes,
-            encoded.u8_bytes,
-            valid_tokens_by_group={0: tokens},
-        ).synchronize()
+        target_slot = 1 - part
+        lengths = tuple(length for _, length in chunk.buffers)
+        target_io.receive_buffers(target_slot, lengths)
+        source, target = producer.slots[part], consumer.slots[target_slot]
+        for name, length in zip(("arena_a", "aux", "raw_tail"), lengths, strict=True):
+            if length:
+                getattr(target, name)[:length].copy_(getattr(source, name)[:length])
+        torch.accelerator.synchronize()
+        plan = target_io.plan(target_slot, [[1, 3][:count]], part, {0: tokens})
+        with pytest.raises(ValueError, match="lengths"):
+            target_io.decompress(plan, (lengths[0] + 1, *lengths[1:]), chunk.descriptor)
+        target_io.decompress(plan, lengths, chunk.descriptor).synchronize()
         _assert_restored(
             producer, consumer, part, tokens, atol=0.3 if stages is None else 0.06
         )

@@ -9,7 +9,6 @@ buffers described by that header.
 
 from __future__ import annotations
 
-import struct
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -17,62 +16,14 @@ from typing import Any
 
 import torch
 
-_MAGIC = b"KVSSTOR1"
-_HEADER = struct.Struct(">8sBBHIIII32s")
-HEADER_BYTES = _HEADER.size
+from ...compression.runtime.representation import (
+    HEADER_BYTES,
+    ChunkIO,
+    StoreManifest,
+    _profile_digest,
+)
+
 _KEY_TAG = "@kvserve-store-v1"
-# Keep the Store envelope independently importable. Bump together with the
-# public compression runtime API when its payload contract changes.
-_API_VERSION = 1
-
-
-@dataclass(frozen=True)
-class StoreManifest:
-    """Fixed-size metadata required to restore one compressed K or V object."""
-
-    kv_part: int
-    codec_bytes: int
-    decoded_bytes: int
-    aux_bytes: int
-    raw_tail_bytes: int
-    profile: bytes
-
-    def __post_init__(self) -> None:
-        if self.kv_part not in (0, 1):
-            raise ValueError("kv_part must be 0 (K) or 1 (V)")
-        for field in ("codec_bytes", "decoded_bytes", "aux_bytes", "raw_tail_bytes"):
-            if not 0 <= getattr(self, field) <= 0xFFFFFFFF:
-                raise ValueError(f"{field} is outside the Store header range")
-        if len(self.profile) != 32:
-            raise ValueError("profile must be a 32-byte SHA-256 digest")
-
-    def encode(self) -> bytes:
-        return _HEADER.pack(
-            _MAGIC,
-            _API_VERSION,
-            self.kv_part,
-            0,
-            self.codec_bytes,
-            self.decoded_bytes,
-            self.aux_bytes,
-            self.raw_tail_bytes,
-            self.profile,
-        )
-
-    @classmethod
-    def decode(cls, value: bytes | bytearray | memoryview) -> StoreManifest:
-        if len(value) != HEADER_BYTES:
-            raise ValueError(f"Store header must be exactly {HEADER_BYTES} bytes")
-        magic, version, kv_part, flags, codec, decoded, aux, tail, profile = (
-            _HEADER.unpack(value)
-        )
-        if magic != _MAGIC:
-            raise ValueError("Store object is not a KVServe-compressed value")
-        if version != _API_VERSION:
-            raise ValueError(f"Unsupported KVServe Store API version: {version}")
-        if flags:
-            raise ValueError("Store header contains unsupported flags")
-        return cls(kv_part, codec, decoded, aux, tail, profile)
 
 
 @dataclass(frozen=True)
@@ -103,19 +54,6 @@ class StoreReadPlan:
     buffers: tuple[StorePayloadBuffer, ...]
 
 
-def _profile_digest(runtime: Any) -> bytes:
-    profile = getattr(runtime, "wire_profile", None)
-    if not isinstance(profile, str) or len(profile) != 64:
-        raise RuntimeError(
-            "Bind the KV caches before creating Store keys; the runtime must "
-            "expose its 64-character wire_profile."
-        )
-    try:
-        return bytes.fromhex(profile)
-    except ValueError as exc:
-        raise RuntimeError("Runtime wire_profile is not a SHA-256 digest") from exc
-
-
 def _profile_key(profile: bytes) -> str:
     return profile.hex()[:16]
 
@@ -144,6 +82,7 @@ class MooncakeStoreCompressionAdapter:
         if not callable(getattr(runtime, "data_bytes", None)):
             raise ValueError("Mooncake Store requires a runtime with decoded byte counts")
         self.runtime = runtime
+        self._chunk_io = ChunkIO(runtime)
         # vLLM allocates/registers cache tensors after connector planning;
         # CompressionRuntime computes the peer profile when those caches bind.
         self._profile: bytes | None = None
@@ -251,53 +190,30 @@ class MooncakeStoreCompressionAdapter:
     ) -> StoreWritePlan:
         """Encode one K or V sub-object and return Store buffer descriptors."""
         self._validate_slot(slot_id)
-        profile = self._require_profile()
-        if kv_part not in (0, 1):
-            raise ValueError("kv_part must be 0 (K) or 1 (V)")
-        encoded = self.runtime.encode(
-            slot_id,
-            logical_ids_by_group,
-            kv_part,
-            valid_tokens_by_group=valid_tokens_by_group,
+        chunk = self._chunk_io.compress(
+            self._chunk_io.plan(
+                slot_id, logical_ids_by_group, kv_part, valid_tokens_by_group
+            )
         )
-        encoded.event.synchronize()
-        codec_bytes = encoded.codec_bytes
-        aux_bytes = self.runtime.aux_bytes(kv_part, valid_tokens_by_group)
-        manifest = StoreManifest(
-            kv_part=kv_part,
-            codec_bytes=codec_bytes,
-            decoded_bytes=encoded.u8_bytes,
-            aux_bytes=aux_bytes,
-            raw_tail_bytes=encoded.raw_tail_bytes,
-            profile=profile,
-        )
+        if len(chunk.descriptor) != HEADER_BYTES:
+            raise ValueError("Compressed block exceeds the Store v1 format")
         header_tensor = self._host_headers[slot_id]
-        header_tensor.copy_(torch.frombuffer(bytearray(manifest.encode()), dtype=torch.uint8))
-        buffers: list[StorePayloadBuffer] = []
-        if codec_bytes:
-            buffers.append(
-                StorePayloadBuffer(self.runtime.slots[slot_id].arena_a.data_ptr(), codec_bytes)
-            )
-        if aux_bytes:
-            buffers.append(
-                StorePayloadBuffer(self.runtime.slots[slot_id].aux.data_ptr(), aux_bytes)
-            )
-        if manifest.raw_tail_bytes:
-            if not encoded.raw_tail_addr:
-                raise RuntimeError("Runtime returned raw-tail bytes without a buffer")
-            buffers.append(
-                StorePayloadBuffer(encoded.raw_tail_addr, manifest.raw_tail_bytes)
-            )
+        header_tensor.copy_(
+            torch.frombuffer(bytearray(chunk.descriptor), dtype=torch.uint8)
+        )
+        buffers = tuple(
+            StorePayloadBuffer(addr, size) for addr, size in chunk.buffers if size
+        )
         key = self.key_for(base_key, kv_part)
         return StoreWritePlan(
             key=key,
             header_key=f"{key}:manifest",
             kv_part=kv_part,
-            header=manifest.encode(),
+            header=chunk.descriptor,
             header_buffer=StorePayloadBuffer(header_tensor.data_ptr(), HEADER_BYTES),
-            buffers=tuple(buffers),
+            buffers=buffers,
             total_bytes=HEADER_BYTES + sum(buffer.nbytes for buffer in buffers),
-            event=encoded.event,
+            event=chunk.event,
         )
 
     def header_read_target(self, slot_id: int) -> StorePayloadBuffer:
@@ -305,10 +221,13 @@ class MooncakeStoreCompressionAdapter:
         self._validate_slot(slot_id)
         return StorePayloadBuffer(self._host_headers[slot_id].data_ptr(), HEADER_BYTES)
 
+    def read_descriptor(self, slot_id: int) -> bytes:
+        self._validate_slot(slot_id)
+        return bytes(self._host_headers[slot_id].tolist())
+
     def decode_header(self, slot_id: int) -> StoreManifest:
         """Parse the header just fetched into ``header_read_target(slot_id)``."""
-        self._validate_slot(slot_id)
-        return StoreManifest.decode(bytes(self._host_headers[slot_id].tolist()))
+        return StoreManifest.decode(self.read_descriptor(slot_id))
 
     def payload_read_plan(
         self,
@@ -321,41 +240,28 @@ class MooncakeStoreCompressionAdapter:
         self._validate_slot(slot_id)
         profile = self._require_profile()
         manifest = (
-            header if isinstance(header, StoreManifest) else StoreManifest.decode(header)
+            header
+            if isinstance(header, StoreManifest)
+            else StoreManifest.decode(header)
         )
         if manifest.kv_part != kv_part:
             raise ValueError("Store object K/V part does not match the requested key")
         if manifest.profile != profile:
             raise ValueError("Store object compression profile does not match runtime")
-        slot = self.runtime.slots[slot_id]
-        if manifest.codec_bytes > slot.arena_a.numel():
-            raise ValueError("Store payload exceeds the runtime codec buffer")
-        if manifest.aux_bytes > slot.aux.numel():
-            raise ValueError("Store auxiliary data exceeds the runtime buffer")
-        if manifest.raw_tail_bytes and (
-            slot.raw_tail is None or manifest.raw_tail_bytes > slot.raw_tail.numel()
-        ):
-            raise ValueError("Store raw tail exceeds the runtime buffer")
-        buffers: list[StorePayloadBuffer] = []
-        if manifest.codec_bytes:
-            buffers.append(StorePayloadBuffer(slot.arena_a.data_ptr(), manifest.codec_bytes))
-        if manifest.aux_bytes:
-            buffers.append(StorePayloadBuffer(slot.aux.data_ptr(), manifest.aux_bytes))
-        if manifest.raw_tail_bytes:
-            buffers.append(
-                StorePayloadBuffer(slot.raw_tail.data_ptr(), manifest.raw_tail_bytes)
-            )
+        buffers = self._chunk_io.receive_buffers(slot_id, manifest.lengths)
         return StoreReadPlan(
             key=self.key_for(base_key, kv_part),
             header_key=f"{self.key_for(base_key, kv_part)}:manifest",
             manifest=manifest,
-            buffers=tuple(buffers),
+            buffers=tuple(
+                StorePayloadBuffer(addr, size) for addr, size in buffers if size
+            ),
         )
 
     def decode_from_store(
         self,
         slot_id: int,
-        manifest: StoreManifest,
+        manifest: StoreManifest | bytes,
         logical_ids_by_group: list[list[int]],
         kv_part: int,
         *,
@@ -363,24 +269,17 @@ class MooncakeStoreCompressionAdapter:
     ) -> Any:
         """Decode into the bound KV cache; caller fences the event before use."""
         self._validate_slot(slot_id)
-        if manifest.kv_part != kv_part or manifest.profile != self._require_profile():
-            raise ValueError("Store manifest is incompatible with this decode request")
-        expected_aux = self.runtime.aux_bytes(kv_part, valid_tokens_by_group)
-        expected_decoded = self.runtime.data_bytes(kv_part, valid_tokens_by_group)
-        expected_tail = self.runtime.layout.raw_tail_bytes(kv_part, valid_tokens_by_group)
-        if manifest.aux_bytes != expected_aux:
-            raise ValueError("Store auxiliary byte count does not match cache geometry")
-        if manifest.decoded_bytes != expected_decoded:
-            raise ValueError("Store decoded byte count does not match cache geometry")
-        if manifest.raw_tail_bytes != expected_tail:
-            raise ValueError("Store raw-tail byte count does not match cache geometry")
-        return self.runtime.decode(
-            slot_id,
-            logical_ids_by_group,
-            kv_part,
-            manifest.codec_bytes,
-            manifest.decoded_bytes,
-            valid_tokens_by_group=valid_tokens_by_group,
+        if isinstance(manifest, bytes):
+            descriptor = manifest
+            manifest = StoreManifest.decode(descriptor)
+        else:
+            descriptor = manifest.encode()
+        return self._chunk_io.decompress(
+            self._chunk_io.plan(
+                slot_id, logical_ids_by_group, kv_part, valid_tokens_by_group
+            ),
+            manifest.lengths,
+            descriptor,
         )
 
     def close(self) -> None:
