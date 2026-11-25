@@ -99,7 +99,7 @@ def main() -> None:
                     def encode():
                         chunks = []
                         for part in (0, 1):
-                            chunk = runtime.encode(part, [source], part,
+                            chunk = runtime.compress(part, [source], part,
                                 valid_tokens_by_group={0: tokens})
                             chunk.event.synchronize()
                             if chunk.raw_tail_bytes:
@@ -109,7 +109,7 @@ def main() -> None:
 
                     def decode(chunks):
                         for part, chunk in enumerate(chunks):
-                            runtime.decode(part, [destination], part, chunk.codec_bytes,
+                            runtime.decompress(part, [destination], part, chunk.codec_bytes,
                                 chunk.u8_bytes, valid_tokens_by_group={0: tokens}).synchronize()
 
                     for _ in range(args.warmups):

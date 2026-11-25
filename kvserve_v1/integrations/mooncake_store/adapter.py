@@ -179,7 +179,7 @@ class MooncakeStoreCompressionAdapter:
             self._free_slots.append(slot_id)
             self._slot_condition.notify()
 
-    def encode_for_store(
+    def compress_for_store(
         self,
         slot_id: int,
         base_key: str,
@@ -188,7 +188,7 @@ class MooncakeStoreCompressionAdapter:
         *,
         valid_tokens_by_group: dict[int, int],
     ) -> StoreWritePlan:
-        """Encode one K or V sub-object and return Store buffer descriptors."""
+        """Compress one K or V sub-object and return Store buffer descriptors."""
         self._validate_slot(slot_id)
         chunk = self._chunk_io.compress(
             self._chunk_io.plan(
@@ -225,9 +225,9 @@ class MooncakeStoreCompressionAdapter:
         self._validate_slot(slot_id)
         return bytes(self._host_headers[slot_id].tolist())
 
-    def decode_header(self, slot_id: int) -> StoreManifest:
+    def read_manifest(self, slot_id: int) -> StoreManifest:
         """Parse the header just fetched into ``header_read_target(slot_id)``."""
-        return StoreManifest.decode(self.read_descriptor(slot_id))
+        return StoreManifest.from_bytes(self.read_descriptor(slot_id))
 
     def payload_read_plan(
         self,
@@ -242,7 +242,7 @@ class MooncakeStoreCompressionAdapter:
         manifest = (
             header
             if isinstance(header, StoreManifest)
-            else StoreManifest.decode(header)
+            else StoreManifest.from_bytes(header)
         )
         if manifest.kv_part != kv_part:
             raise ValueError("Store object K/V part does not match the requested key")
@@ -258,7 +258,7 @@ class MooncakeStoreCompressionAdapter:
             ),
         )
 
-    def decode_from_store(
+    def decompress_from_store(
         self,
         slot_id: int,
         manifest: StoreManifest | bytes,
@@ -267,13 +267,13 @@ class MooncakeStoreCompressionAdapter:
         *,
         valid_tokens_by_group: dict[int, int],
     ) -> Any:
-        """Decode into the bound KV cache; caller fences the event before use."""
+        """Decompress into the bound KV cache; caller fences the event before use."""
         self._validate_slot(slot_id)
         if isinstance(manifest, bytes):
             descriptor = manifest
-            manifest = StoreManifest.decode(descriptor)
+            manifest = StoreManifest.from_bytes(descriptor)
         else:
-            descriptor = manifest.encode()
+            descriptor = manifest.to_bytes()
         return self._chunk_io.decompress(
             self._chunk_io.plan(
                 slot_id, logical_ids_by_group, kv_part, valid_tokens_by_group

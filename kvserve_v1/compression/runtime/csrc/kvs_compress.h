@@ -76,11 +76,11 @@ void kvs_hadamard_flat(int64_t input_ptr, int64_t output_ptr, int64_t rows,
 
 // Encode one chunk (one kv_part across all layers of the blob).  The caller
 // has already zeroed the u8/aux regions and uploaded the block indices.
-int kvs_encode_flat(int64_t meta_ptr, int64_t indices_ptr, int64_t num_blocks,
+int kvs_compress_flat(int64_t meta_ptr, int64_t indices_ptr, int64_t num_blocks,
                     int64_t valid_tokens, int64_t stream_ptr);
 
 // Decode one chunk.  The u8 stream must already hold the decoded bytes.
-int kvs_decode_flat(int64_t meta_ptr, int64_t indices_ptr, int64_t num_blocks,
+int kvs_decompress_flat(int64_t meta_ptr, int64_t indices_ptr, int64_t num_blocks,
                     int64_t valid_tokens, int64_t u8_bytes, int64_t stream_ptr);
 
 #ifdef __cplusplus

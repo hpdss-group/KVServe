@@ -51,7 +51,7 @@ class ANSCodec:
             stream.cuda_stream,
         )
 
-    def encode(
+    def compress(
         self,
         source: torch.Tensor,
         output: torch.Tensor,
@@ -77,7 +77,7 @@ class ANSCodec:
         )
         return EncodedChunk(encoded, event, u8_bytes)
 
-    def decode(
+    def decompress(
         self,
         source: torch.Tensor,
         output: torch.Tensor,

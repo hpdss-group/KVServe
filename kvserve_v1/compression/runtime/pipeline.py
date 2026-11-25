@@ -514,7 +514,7 @@ class CompressionPipeline:
         shape = (blocks, *cache_part.shape[1:])
         return buffer[offset : offset + nbytes].view(part.dtype).view(shape)
 
-    def _encode_aggregate(
+    def _compress_aggregate(
         self,
         slot: CompressionSlotBuffers,
         logical_ids_by_group: list[list[int]],
@@ -536,7 +536,7 @@ class CompressionPipeline:
             None, slot.completion_event, payload_bytes, payload_bytes, 0, 0
         )
 
-    def _decode_aggregate(
+    def _decompress_aggregate(
         self,
         slot: CompressionSlotBuffers,
         logical_ids_by_group: list[list[int]],
@@ -554,7 +554,7 @@ class CompressionPipeline:
             slot.completion_event.record(self.stream)
         return slot.completion_event
 
-    def encode(
+    def compress(
         self,
         slot_id: int,
         logical_ids_by_group: list[list[int]],
@@ -580,7 +580,7 @@ class CompressionPipeline:
                 self.layout.u8_bytes_by_part[kv_part],
             )
         if "aggregate" in self.stages:
-            return self._encode_aggregate(slot, logical_ids_by_group, kv_part)
+            return self._compress_aggregate(slot, logical_ids_by_group, kv_part)
         with torch.cuda.stream(self.stream):
             # Layout offsets and codec capacities are planned for the maximum
             # chunk. Clear unused tail regions so a short final chunk cannot
@@ -601,7 +601,7 @@ class CompressionPipeline:
                 group_index = next(iter(self.layout.fa_group_indices))
                 indices = index_cache[group_index]
                 valid_tokens = valid_tokens_by_group[group_index]
-                cpp_backend.encode_chunk(
+                cpp_backend.compress_chunk(
                     self._cpp_meta(slot_id, kv_part),
                     indices,
                     indices.numel(),
@@ -656,7 +656,7 @@ class CompressionPipeline:
                     slot.raw_tail.data_ptr() if slot.raw_tail is not None else 0,
                 )
             assert self.codec is not None
-            encoded = self.codec.encode(
+            encoded = self.codec.compress(
                 slot.arena_b[self.layout.u8_base :],
                 slot.arena_a,
                 u8_bytes,
@@ -717,7 +717,7 @@ class CompressionPipeline:
         unordered.index_copy_(2, self.head_orders[part.layer_name], canonical_b)
         self._cache_part(part).index_copy_(0, indices, scratch)
 
-    def decode(
+    def decompress(
         self,
         slot_id: int,
         logical_ids_by_group: list[list[int]],
@@ -728,7 +728,7 @@ class CompressionPipeline:
         valid_tokens_by_group: dict[int, int],
     ) -> torch.cuda.Event:
         if "aggregate" in self.stages:
-            return self._decode_aggregate(
+            return self._decompress_aggregate(
                 self.slots[slot_id],
                 logical_ids_by_group,
                 kv_part,
@@ -748,7 +748,7 @@ class CompressionPipeline:
         with torch.cuda.stream(self.stream):
             if u8_bytes and "codec" in self.stages:
                 assert self.codec is not None
-                self.codec.decode(
+                self.codec.decompress(
                     slot.arena_a,
                     slot.arena_b[self.layout.u8_base :],
                     codec_bytes,
@@ -764,7 +764,7 @@ class CompressionPipeline:
                 group_index = next(iter(self.layout.fa_group_indices))
                 indices = index_cache[group_index]
                 valid_tokens = valid_tokens_by_group[group_index]
-                cpp_backend.decode_chunk(
+                cpp_backend.decompress_chunk(
                     self._cpp_meta(slot_id, kv_part),
                     indices,
                     indices.numel(),

@@ -236,14 +236,14 @@ def build_meta(pipeline: Any, slot: Any, kv_part: int) -> torch.Tensor:
     return meta
 
 
-def encode_chunk(
+def compress_chunk(
     meta: torch.Tensor,
     indices: torch.Tensor,
     num_blocks: int,
     valid_tokens: int,
     stream: torch.cuda.Stream,
 ) -> None:
-    load_kvs_compress().kvs_encode_flat(
+    load_kvs_compress().kvs_compress_flat(
         meta.data_ptr(),
         indices.data_ptr(),
         int(num_blocks),
@@ -252,7 +252,7 @@ def encode_chunk(
     )
 
 
-def decode_chunk(
+def decompress_chunk(
     meta: torch.Tensor,
     indices: torch.Tensor,
     num_blocks: int,
@@ -260,7 +260,7 @@ def decode_chunk(
     u8_bytes: int,
     stream: torch.cuda.Stream,
 ) -> None:
-    load_kvs_compress().kvs_decode_flat(
+    load_kvs_compress().kvs_decompress_flat(
         meta.data_ptr(),
         indices.data_ptr(),
         int(num_blocks),

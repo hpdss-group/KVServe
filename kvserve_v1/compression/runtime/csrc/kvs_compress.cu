@@ -740,7 +740,7 @@ extern "C" void kvs_hadamard_flat(int64_t input_ptr, int64_t output_ptr,
               reinterpret_cast<cudaStream_t>(stream_ptr));
 }
 
-extern "C" int kvs_encode_flat(int64_t meta_ptr, int64_t indices_ptr,
+extern "C" int kvs_compress_flat(int64_t meta_ptr, int64_t indices_ptr,
                                int64_t num_blocks, int64_t valid_tokens,
                                int64_t stream_ptr) {
   const int64_t* meta = reinterpret_cast<const int64_t*>(meta_ptr);
@@ -772,7 +772,7 @@ extern "C" int kvs_encode_flat(int64_t meta_ptr, int64_t indices_ptr,
   return 0;
 }
 
-extern "C" int kvs_decode_flat(int64_t meta_ptr, int64_t indices_ptr,
+extern "C" int kvs_decompress_flat(int64_t meta_ptr, int64_t indices_ptr,
                                int64_t num_blocks, int64_t valid_tokens,
                                int64_t u8_bytes, int64_t stream_ptr) {
   const int64_t* meta = reinterpret_cast<const int64_t*>(meta_ptr);

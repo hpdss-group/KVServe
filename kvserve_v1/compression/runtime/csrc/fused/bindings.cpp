@@ -67,13 +67,13 @@ class ExecutionPlan {
       throw;
     }
   }
-  void encode(NativeANS& ans, uintptr_t quant, uintptr_t output, size_t bytes,
+  void compress(NativeANS& ans, uintptr_t quant, uintptr_t output, size_t bytes,
               uintptr_t completion, int tokens, uintptr_t aux_source,
               uintptr_t aux_output, size_t aux_bytes) {
     DeviceGuard guard(device_);
     validate(tokens, bytes);
     launch(tokens, true);
-    ans.encode(quant, output, bytes);
+    ans.compress(quant, output, bytes);
     if (aux_bytes) {
       if (!aux_source || !aux_output) throw std::invalid_argument("Missing leased auxiliary output");
       checked(cudaMemcpyAsync(reinterpret_cast<void*>(aux_output),
@@ -82,15 +82,15 @@ class ExecutionPlan {
     }
     checked(cudaEventRecord(reinterpret_cast<cudaEvent_t>(completion), reinterpret_cast<cudaStream_t>(stream_)));
   }
-  void decode(NativeANS& ans, uintptr_t source, uintptr_t quant, size_t bytes,
+  void decompress(NativeANS& ans, uintptr_t source, uintptr_t quant, size_t bytes,
               uintptr_t completion, int tokens, bool standard_layout) {
     DeviceGuard guard(device_);
     if (tokens < 1 || tokens > capacity_ ||
         bytes != expected(standard_layout ? capacity_ : tokens))
       throw std::invalid_argument("Invalid fused decode layout or length");
-    ans.decode(source, quant, bytes);
+    ans.decompress(source, quant, bytes);
     if (standard_layout && tokens != capacity_)
-      kvs_fused_decode(cpu_, gpu_, host_ids_, gpu_ids_, tokens, part_, capacity_,
+      kvs_fused_decompress(cpu_, gpu_, host_ids_, gpu_ids_, tokens, part_, capacity_,
                        heads_, stream_, true);
     else
       launch(tokens, false);
@@ -110,8 +110,8 @@ class ExecutionPlan {
       throw std::invalid_argument("Fused frame length does not match geometry");
   }
   void launch_eager(int tokens, bool encode) {
-    if (encode) kvs_fused_encode(cpu_, gpu_, host_ids_, gpu_ids_, tokens, part_, capacity_, heads_, stream_);
-    else kvs_fused_decode(cpu_, gpu_, host_ids_, gpu_ids_, tokens, part_, capacity_, heads_, stream_, false);
+    if (encode) kvs_fused_compress(cpu_, gpu_, host_ids_, gpu_ids_, tokens, part_, capacity_, heads_, stream_);
+    else kvs_fused_decompress(cpu_, gpu_, host_ids_, gpu_ids_, tokens, part_, capacity_, heads_, stream_, false);
   }
   void launch(int tokens, bool encode) {
     auto found = graphs_.find(std::make_pair(encode, tokens));
@@ -136,8 +136,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   py::class_<ExecutionPlan>(module, "ExecutionPlan")
     .def(py::init<int64_t,int64_t,int64_t,int64_t,int,int,int,int,int64_t>())
     .def("build", &ExecutionPlan::build, py::call_guard<py::gil_scoped_release>())
-    .def("encode", &ExecutionPlan::encode, py::call_guard<py::gil_scoped_release>())
-    .def("decode", &ExecutionPlan::decode, py::call_guard<py::gil_scoped_release>())
+    .def("compress", &ExecutionPlan::compress, py::call_guard<py::gil_scoped_release>())
+    .def("decompress", &ExecutionPlan::decompress, py::call_guard<py::gil_scoped_release>())
     .def("close", &ExecutionPlan::close, py::call_guard<py::gil_scoped_release>());
   module.def("bind_shared", &kvs_fused_bind_shared, py::call_guard<py::gil_scoped_release>());
 }

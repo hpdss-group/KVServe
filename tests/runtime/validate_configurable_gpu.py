@@ -50,7 +50,7 @@ def round_trip(runtime, caches, source, target, part, count, capacity):
     source_before = {name: pair[part][:capacity].clone() for name, pair in caches.items()}
     other_before = {name: pair[1 - part].clone() for name, pair in caches.items()}
     output, auxiliary = runtime.output_slots[0]
-    encoded = runtime.encode_into(
+    encoded = runtime.compress_into(
         0,
         [source],
         part,
@@ -67,7 +67,7 @@ def round_trip(runtime, caches, source, target, part, count, capacity):
     slot.arena_a[:payload_bytes].copy_(output[:payload_bytes])
     slot.aux[:aux_bytes].copy_(auxiliary[:aux_bytes])
     torch.cuda.synchronize()
-    runtime.decode(
+    runtime.decompress(
         0,
         [target],
         part,

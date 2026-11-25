@@ -38,22 +38,22 @@ try:
     if n>capacity:continue
     ids=torch.randperm(capacity)[:n].tolist();dst=list(range(capacity+32,capacity+32+n))
     for part in (0,1):
-     original=ref.encode(0,[ids],part,valid_tokens_by_group={0:n});original.event.synchronize()
+     original=ref.compress(0,[ids],part,valid_tokens_by_group={0:n});original.event.synchronize()
      standard_payload=ref.slots[0].arena_a[:original.codec_bytes].clone()
      qref=ref.slots[0].arena_b[ref.layout.u8_base:ref.layout.u8_base+original.u8_bytes].clone()
      auxref=ref.slots[0].aux[:ref.aux_bytes(part,{0:n})].clone()
-     ref.decode(0,[dst],part,original.codec_bytes,original.u8_bytes,valid_tokens_by_group={0:n}).synchronize()
+     ref.decompress(0,[dst],part,original.codec_bytes,original.u8_bytes,valid_tokens_by_group={0:n}).synchronize()
      expected=torch.stack([caches[name][part][dst] for name in specs])
      for pair in caches.values():pair[part][capacity:].fill_(17)
      if row['backend']=='FusedCompressionRuntime':
       rt.slots[0].arena_a[:standard_payload.numel()].copy_(standard_payload)
       rt.slots[0].aux[:auxref.numel()].copy_(auxref);torch.cuda.synchronize(device)
-      rt.decode(0,[dst],part,original.codec_bytes,original.u8_bytes,valid_tokens_by_group={0:n},wire_profile=rt.standard_wire_profile).synchronize()
+      rt.decompress(0,[dst],part,original.codec_bytes,original.u8_bytes,valid_tokens_by_group={0:n},wire_profile=rt.standard_wire_profile).synchronize()
       actual=torch.stack([caches[name][part][dst] for name in specs])
       assert torch.equal(actual.view(torch.uint8),expected.view(torch.uint8)),(row,n,part,'standard-wire-restored')
       for pair in caches.values():pair[part][capacity:].fill_(17)
      payload,auxiliary=rt.output_slots[0]
-     encoded=rt.encode_into(0,[ids],part,valid_tokens_by_group={0:n},output=payload,auxiliary=auxiliary);encoded.event.synchronize()
+     encoded=rt.compress_into(0,[ids],part,valid_tokens_by_group={0:n},output=payload,auxiliary=auxiliary);encoded.event.synchronize()
      size=encoded.codec_bytes;assert size>0 and encoded.raw_tail_bytes==0
      q=rt.slots[0].arena_b[rt.layout.u8_base:rt.layout.u8_base+encoded.u8_bytes]
      width=heads*dim
@@ -63,7 +63,7 @@ try:
      else:assert torch.equal(q,qref),(row,n,part,'quant-standard')
      assert torch.equal(auxiliary[:auxref.numel()],auxref),(row,n,part,'aux')
      rt.slots[0].arena_a[:size].copy_(payload[:size]);rt.slots[0].aux[:auxref.numel()].copy_(auxiliary[:auxref.numel()]);torch.cuda.synchronize(device)
-     rt.decode(0,[dst],part,size,encoded.u8_bytes,valid_tokens_by_group={0:n}).synchronize()
+     rt.decompress(0,[dst],part,size,encoded.u8_bytes,valid_tokens_by_group={0:n}).synchronize()
      actual=torch.stack([caches[name][part][dst] for name in specs])
      assert torch.equal(actual.view(torch.uint8),expected.view(torch.uint8)),(row,n,part,'restored')
      for pair in caches.values():pair[part][capacity:].fill_(17)

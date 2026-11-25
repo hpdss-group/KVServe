@@ -16,10 +16,10 @@
 // capacity if a direct ABI caller uses one. Python capability may be stricter.
 extern "C" {
 void kvs_fused_bind_shared(int device);
-void kvs_fused_encode(int64_t meta_cpu, int64_t meta_gpu, int64_t host_ids,
+void kvs_fused_compress(int64_t meta_cpu, int64_t meta_gpu, int64_t host_ids,
                       int64_t gpu_ids, int tokens, int part, int capacity,
                       int heads, int64_t stream);
-void kvs_fused_decode(int64_t meta_cpu, int64_t meta_gpu, int64_t host_ids,
+void kvs_fused_decompress(int64_t meta_cpu, int64_t meta_gpu, int64_t host_ids,
                       int64_t gpu_ids, int tokens, int part, int capacity,
                       int heads, int64_t stream, bool standard_layout);
 }

@@ -15,10 +15,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   // encode launches hundreds of kernels, and holding the GIL for that long
   // stalls the engine main thread of this TP rank (and with it every other
   // rank's NCCL all-reduce).
-  m.def("kvs_encode_flat", &kvs_encode_flat,
+  m.def("kvs_compress_flat", &kvs_compress_flat,
         "Encode one chunk from a flat metadata blob",
         py::call_guard<py::gil_scoped_release>());
-  m.def("kvs_decode_flat", &kvs_decode_flat,
+  m.def("kvs_decompress_flat", &kvs_decompress_flat,
         "Decode one chunk from a flat metadata blob",
         py::call_guard<py::gil_scoped_release>());
 }

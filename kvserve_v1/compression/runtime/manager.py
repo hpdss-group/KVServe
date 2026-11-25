@@ -415,7 +415,7 @@ class CompressionRuntime:
         if self.execution not in ("both", operation):
             raise RuntimeError(f"KVServe {self.execution}-only runtime cannot {operation}")
 
-    def encode_into(self, slot_id, logical_ids_by_group, kv_part, *,
+    def compress_into(self, slot_id, logical_ids_by_group, kv_part, *,
                     valid_tokens_by_group, output, auxiliary) -> EncodedChunk:
         """Standard compressed execution with a completion-fenced output copy.
 
@@ -430,7 +430,7 @@ class CompressionRuntime:
             if (tensor.device != slot.arena_a.device or tensor.dtype != torch.uint8
                     or not tensor.is_contiguous() or tensor.numel() < capacity):
                 raise ValueError("Invalid encoded output or auxiliary bank")
-        encoded = self.encode(slot_id, logical_ids_by_group, kv_part,
+        encoded = self.compress(slot_id, logical_ids_by_group, kv_part,
                               valid_tokens_by_group=valid_tokens_by_group)
         encoded.event.synchronize()
         if encoded.raw_tail_bytes:
@@ -445,7 +445,7 @@ class CompressionRuntime:
         return EncodedChunk(encoded.array, slot.completion_event, encoded.u8_bytes,
                             payload_bytes=size)
 
-    def encode(
+    def compress(
         self,
         slot_id: int,
         logical_ids_by_group: list[list[int]],
@@ -454,14 +454,14 @@ class CompressionRuntime:
         valid_tokens_by_group: dict[int, int],
     ) -> EncodedChunk:
         self._require_execution("encode")
-        return self.pipelines[slot_id].encode(
+        return self.pipelines[slot_id].compress(
             slot_id,
             logical_ids_by_group,
             kv_part,
             valid_tokens_by_group=valid_tokens_by_group,
         )
 
-    def decode(
+    def decompress(
         self,
         slot_id: int,
         logical_ids_by_group: list[list[int]],
@@ -479,7 +479,7 @@ class CompressionRuntime:
             raise ValueError("Compressed chunk exceeds receive buffer capacity")
         if "codec" not in self.config.pipeline and codec_bytes != u8_bytes:
             raise ValueError("Unencoded chunk payload size does not match its layout")
-        return self.pipelines[slot_id].decode(
+        return self.pipelines[slot_id].decompress(
             slot_id,
             logical_ids_by_group,
             kv_part,

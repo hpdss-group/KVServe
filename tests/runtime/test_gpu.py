@@ -226,10 +226,10 @@ def test_nonidentity_head_order_restores_original_heads(make_manager, tmp_path):
     target.fill_(-9)
     torch.accelerator.synchronize()
     for part in (0, 1):
-        encoded = producer.encode(part, [[2]], part, valid_tokens_by_group={0: 16})
+        encoded = producer.compress(part, [[2]], part, valid_tokens_by_group={0: 16})
         encoded.event.synchronize()
         _copy_wire(producer, consumer, encoded, part, 16)
-        consumer.decode(
+        consumer.decompress(
             1 - part,
             [[1]],
             part,
@@ -249,11 +249,11 @@ def test_raw_aggregate_multiple_chunks_reuse_slots_exactly(make_manager):
         slot = chunk % 2
         section = slice(part * 8, (part + 1) * 8)
         source = cache[block, :, :, section].clone()
-        encoded = manager.encode(slot, [[block]], part, valid_tokens_by_group={0: 16})
+        encoded = manager.compress(slot, [[block]], part, valid_tokens_by_group={0: 16})
         encoded.event.synchronize()
         cache[block, :, :, section].zero_()
         torch.accelerator.synchronize()
-        manager.decode(
+        manager.decompress(
             slot,
             [[block]],
             part,
@@ -271,16 +271,16 @@ def test_aggregate_indices_use_slot_stream_and_sparse_group(make_manager):
     cache[0].fill_(1)
     cache[1].fill_(2)
     torch.accelerator.synchronize()
-    manager.encode(0, [[], [0]], 0, valid_tokens_by_group={1: 16}).event.synchronize()
+    manager.compress(0, [[], [0]], 0, valid_tokens_by_group={1: 16}).event.synchronize()
     caller = torch.cuda.Stream()
     with torch.cuda.stream(caller):
         torch.cuda._sleep(20_000_000)
-        encoded = manager.encode(0, [[], [1]], 0, valid_tokens_by_group={1: 16})
+        encoded = manager.compress(0, [[], [1]], 0, valid_tokens_by_group={1: 16})
     encoded.event.synchronize()
     caller.synchronize()
     with torch.cuda.stream(caller):
         torch.cuda._sleep(20_000_000)
-        event = manager.decode(
+        event = manager.decompress(
             0,
             [[], [3]],
             0,
@@ -301,11 +301,11 @@ def test_concurrent_slots_do_not_cross_request_writes(make_manager):
 
     def encode(slot):
         with torch.accelerator.device_index(0):
-            return manager.encode(slot, [[slot]], 0, valid_tokens_by_group={0: 16})
+            return manager.compress(slot, [[slot]], 0, valid_tokens_by_group={0: 16})
 
     def decode(slot, encoded):
         with torch.accelerator.device_index(0):
-            return manager.decode(
+            return manager.decompress(
                 slot,
                 [[slot]],
                 0,
@@ -349,11 +349,11 @@ def test_probe_and_shutdown_preserve_other_manager_workspace(make_manager, monke
             first.shutdown()
         used.clear()
         source = target[0, :, :, :8].clone()
-        encoded = manager.encode(0, [[0]], 0, valid_tokens_by_group={0: 16})
+        encoded = manager.compress(0, [[0]], 0, valid_tokens_by_group={0: 16})
         encoded.event.synchronize()
         target[0, :, :, :8].zero_()
         torch.accelerator.synchronize()
-        manager.decode(
+        manager.decompress(
             0,
             [[0]],
             0,
@@ -396,7 +396,7 @@ def test_transform_matches_independent_reference(make_manager):
         )
     for part in (0, 1):
         source = cache[0, :, :, part * 128 : (part + 1) * 128].clone()
-        encoded = manager.encode(0, [[0]], part, valid_tokens_by_group={0: 16})
+        encoded = manager.compress(0, [[0]], part, valid_tokens_by_group={0: 16})
         encoded.event.synchronize()
         signs = manager.signs[(LAYER_NAME, part)].cpu().double().reshape(2, 128)
         expected = (
@@ -450,7 +450,7 @@ def test_quantizer_matches_numpy_reference(make_manager, monkeypatch, axis):
         step = np.maximum(high - low, 1e-5) / 15
         expected = np.clip(np.rint((x - low) / step), 0, 15)
         torch.accelerator.synchronize()
-        encoded = manager.encode(0, [[0]], part, valid_tokens_by_group={0: 16})
+        encoded = manager.compress(0, [[0]], part, valid_tokens_by_group={0: 16})
         encoded.event.synchronize()
         actual = (
             manager.slots[0].arena_a[: encoded.u8_bytes].cpu().numpy().reshape(x.shape)
@@ -458,7 +458,7 @@ def test_quantizer_matches_numpy_reference(make_manager, monkeypatch, axis):
         assert np.abs(actual.astype(np.float64) - expected).max() <= 1
         cache[1].zero_()
         torch.accelerator.synchronize()
-        manager.decode(
+        manager.decompress(
             0,
             [[1]],
             part,
@@ -516,7 +516,7 @@ def test_quantization_preserves_bf16_rounding_and_aux(
         shifted = (x.float() - minimum.float()).to(x.dtype)
         expected = (shifted.float() * inverse.float()).to(x.dtype).float()
         expected = expected.round().clamp(0, levels - 1).to(torch.uint8)
-        encoded = manager.encode(0, [[0, 1]], part, valid_tokens_by_group={0: 32})
+        encoded = manager.compress(0, [[0, 1]], part, valid_tokens_by_group={0: 32})
         encoded.event.synchronize()
         actual = manager.slots[0].arena_a[: encoded.u8_bytes].cpu().reshape(x.shape)
         assert torch.equal(actual, expected)
@@ -586,11 +586,11 @@ def test_cross_backend_wire_decode(
     torch.accelerator.synchronize()
     for part in (0, 1):
         monkeypatch.setenv("KVSERVE_COMPRESSION_BACKEND", encoder_backend)
-        encoded = producer.encode(part, [[2, 0]], part, valid_tokens_by_group={0: 31})
+        encoded = producer.compress(part, [[2, 0]], part, valid_tokens_by_group={0: 31})
         encoded.event.synchronize()
         _copy_wire(producer, consumer, encoded, part, 31)
         monkeypatch.setenv("KVSERVE_COMPRESSION_BACKEND", decoder_backend)
-        consumer.decode(
+        consumer.decompress(
             1 - part,
             [[1, 3]],
             part,
@@ -607,18 +607,18 @@ def test_cpp_sparse_fa_group_uses_cpp_without_fallback(make_manager, monkeypatch
     manager.bind_kv_caches({LAYER_NAME: cache}, {LAYER_NAME: 1})
     expected = cache[0, :, :, :8].clone()
     calls = []
-    original = cpp_backend.encode_chunk
+    original = cpp_backend.compress_chunk
 
     def encode(*args):
         calls.append(True)
         return original(*args)
 
-    monkeypatch.setattr(cpp_backend, "encode_chunk", encode)
-    encoded = manager.encode(0, [[], [0]], 0, valid_tokens_by_group={1: 16})
+    monkeypatch.setattr(cpp_backend, "compress_chunk", encode)
+    encoded = manager.compress(0, [[], [0]], 0, valid_tokens_by_group={1: 16})
     encoded.event.synchronize()
     cache[1].zero_()
     torch.accelerator.synchronize()
-    manager.decode(
+    manager.decompress(
         0,
         [[], [1]],
         0,

@@ -344,7 +344,7 @@ class OperatorRuntime:
             return tensors[0], None
         return None, CompressedWire(header["meta"], tensors[:count], tensors[count:])
 
-    def encode(self, slot_id, logical_ids_by_group, kv_part, *, valid_tokens_by_group):
+    def compress(self, slot_id, logical_ids_by_group, kv_part, *, valid_tokens_by_group):
         if self.execution == "decode":
             raise RuntimeError("Decode-only runtime cannot encode")
         slot, stream = self.slots[slot_id], self.streams[slot_id]
@@ -395,7 +395,7 @@ class OperatorRuntime:
                 None, slot.completion_event, raw_bytes, payload_bytes=size
             )
 
-    def decode(
+    def decompress(
         self,
         slot_id,
         logical_ids_by_group,

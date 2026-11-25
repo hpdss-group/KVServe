@@ -104,7 +104,7 @@ def main():
 
             def encode(part):
                 with torch.cuda.device(device), torch.inference_mode():
-                    return runtime.encode(
+                    return runtime.compress(
                         0,
                         [list(range(blocks))],
                         part,

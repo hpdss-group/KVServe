@@ -43,7 +43,7 @@ class StoreManifest:
     def lengths(self) -> tuple[int, int, int]:
         return self.codec_bytes, self.aux_bytes, self.raw_tail_bytes
 
-    def encode(self) -> bytes:
+    def to_bytes(self) -> bytes:
         # Preserve the fixed Store envelope for ordinary blocks. P/D batches
         # can contain larger spans, including raw aggregation.
         wide = max(*self.lengths, self.decoded_bytes) >= 1 << 32
@@ -61,7 +61,7 @@ class StoreManifest:
         )
 
     @classmethod
-    def decode(cls, value: bytes | bytearray | memoryview) -> StoreManifest:
+    def from_bytes(cls, value: bytes | bytearray | memoryview) -> StoreManifest:
         if len(value) == HEADER_BYTES:
             header, expected_version = _HEADER, _STORE_VERSION
         elif len(value) == _WIDE_HEADER.size:
@@ -149,7 +149,7 @@ class ChunkIO:
 
     def compress(self, plan: ChunkPlan) -> CompressedChunk:
         slot, blocks, part, tokens = plan
-        encoded = self.runtime.encode(slot, blocks, part, valid_tokens_by_group=tokens)
+        encoded = self.runtime.compress(slot, blocks, part, valid_tokens_by_group=tokens)
         # Variable codec lengths and borrowed buffers are ready after this fence.
         encoded.event.synchronize()
         manifest = StoreManifest(
@@ -163,13 +163,13 @@ class ChunkIO:
         buffers = self.receive_buffers(slot, manifest.lengths)
         if manifest.raw_tail_bytes and encoded.raw_tail_addr != buffers[-1][0]:
             raise ValueError("Runtime returned a tail outside its registered slot")
-        return CompressedChunk(buffers, manifest.encode(), encoded.event)
+        return CompressedChunk(buffers, manifest.to_bytes(), encoded.event)
 
     def decompress(
         self, plan: ChunkPlan, lengths: tuple[int, ...], descriptor: bytes
     ) -> Any:
         slot, blocks, part, tokens = plan
-        manifest = StoreManifest.decode(descriptor)
+        manifest = StoreManifest.from_bytes(descriptor)
         if manifest.kv_part != part or manifest.profile != _profile_digest(
             self.runtime
         ):
@@ -187,7 +187,7 @@ class ChunkIO:
         )
         if manifest.raw_tail_bytes != expected_tail:
             raise ValueError("Compressed tail bytes do not match cache geometry")
-        return self.runtime.decode(
+        return self.runtime.decompress(
             slot,
             blocks,
             part,

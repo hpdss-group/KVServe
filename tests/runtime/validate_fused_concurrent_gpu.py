@@ -54,16 +54,16 @@ def main():
             src = list(range(slot * 1024, slot * 1024 + count))
             dst = list(range(2048 + slot * 1024, 2048 + slot * 1024 + count))
             before = [c[part][:2048].clone() for c in caches.values()]
-            encoded = oracle.encode(slot, [src], part, valid_tokens_by_group={0: count})
+            encoded = oracle.compress(slot, [src], part, valid_tokens_by_group={0: count})
             encoded.event.synchronize()
-            oracle.decode(slot, [dst], part, encoded.codec_bytes, encoded.u8_bytes,
+            oracle.decompress(slot, [dst], part, encoded.codec_bytes, encoded.u8_bytes,
                           valid_tokens_by_group={0: count}).synchronize()
             expected = [c[part][dst].clone() for c in caches.values()]
             for c in caches.values():
                 c[part][dst] = 0
             torch.cuda.synchronize(device)
             payload, auxiliary = runtime.output_slots[slot]
-            encoded = runtime.encode_into(slot, [src], part,
+            encoded = runtime.compress_into(slot, [src], part,
                 valid_tokens_by_group={0: count}, output=payload, auxiliary=auxiliary)
             encoded.event.synchronize()
             size = encoded.codec_bytes
@@ -71,7 +71,7 @@ def main():
             runtime.slots[slot].arena_a[:size].copy_(payload[:size])
             runtime.slots[slot].aux[:aux_bytes].copy_(auxiliary[:aux_bytes])
             torch.cuda.synchronize(device)
-            runtime.decode(slot, [dst], part, size, encoded.u8_bytes,
+            runtime.decompress(slot, [dst], part, size, encoded.u8_bytes,
                            valid_tokens_by_group={0: count}).synchronize()
             for c, restored, source in zip(caches.values(), expected, before):
                 assert torch.equal(c[part][dst].view(torch.uint8), restored.view(torch.uint8))

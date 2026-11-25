@@ -23,10 +23,10 @@ def test_chunk_descriptor_preserves_store_and_large_transfer_lengths(size, versi
     )
 
     manifest = StoreManifest(0, size, size, 0, 0, bytes(32))
-    descriptor = manifest.encode()
+    descriptor = manifest.to_bytes()
     assert descriptor[8] == version
     assert (len(descriptor) == HEADER_BYTES) == (version == 1)
-    assert StoreManifest.decode(descriptor) == manifest
+    assert StoreManifest.from_bytes(descriptor) == manifest
 
 
 def test_store_requires_decoded_byte_counts_before_allocating_buffers():
@@ -176,13 +176,13 @@ def test_lossless_operator_path_preserves_valid_tokens(codec, threshold):
     try:
         producer.bind_kv_caches({next(iter(specs)): src}, dict.fromkeys(specs, 0))
         consumer.bind_kv_caches({next(iter(specs)): dst}, dict.fromkeys(specs, 0))
-        encoded = producer.encode(0, [[2, 0]], 0, valid_tokens_by_group={0: 31})
+        encoded = producer.compress(0, [[2, 0]], 0, valid_tokens_by_group={0: 31})
         encoded.event.synchronize()
         consumer.slots[0].arena_a[: encoded.codec_bytes].copy_(
             producer.slots[0].arena_a[: encoded.codec_bytes]
         )
         torch.cuda.synchronize()
-        consumer.decode(
+        consumer.decompress(
             0,
             [[1, 3]],
             0,

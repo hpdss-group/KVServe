@@ -471,7 +471,7 @@ extern "C" void kvs_fused_bind_shared(int device) {
   }
 }
 
-extern "C" void kvs_fused_encode(int64_t meta_cpu, int64_t meta_gpu,
+extern "C" void kvs_fused_compress(int64_t meta_cpu, int64_t meta_gpu,
                                    int64_t host_ids, int64_t gpu_ids, int tokens,
                                    int part, int capacity, int heads, int64_t stream) {
   const int layers = validate_fused(meta_cpu, meta_gpu, host_ids, gpu_ids,
@@ -519,7 +519,7 @@ extern "C" void kvs_fused_encode(int64_t meta_cpu, int64_t meta_gpu,
   check_launch("fused vector V gather/FWHT/statistics/quantize");
 }
 
-extern "C" void kvs_fused_decode(int64_t meta_cpu, int64_t meta_gpu,
+extern "C" void kvs_fused_decompress(int64_t meta_cpu, int64_t meta_gpu,
                                    int64_t host_ids, int64_t gpu_ids, int tokens,
                                    int part, int capacity, int heads, int64_t stream,
                                    bool standard_layout) {

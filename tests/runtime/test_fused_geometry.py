@@ -207,13 +207,13 @@ def test_disabled_execution_direction_rejects_submission(runtime_type):
     runtime = runtime_type.__new__(runtime_type)
     runtime.execution = "decode"
     with pytest.raises(RuntimeError, match="decode-only runtime cannot encode"):
-        runtime.encode(0, [[0]], 0, valid_tokens_by_group={0: 1})
+        runtime.compress(0, [[0]], 0, valid_tokens_by_group={0: 1})
     with pytest.raises(RuntimeError, match="decode-only runtime cannot encode"):
-        runtime.encode_into(0, [[0]], 0, valid_tokens_by_group={0: 1},
+        runtime.compress_into(0, [[0]], 0, valid_tokens_by_group={0: 1},
                             output=None, auxiliary=None)
     runtime.execution = "encode"
     with pytest.raises(RuntimeError, match="encode-only runtime cannot decode"):
-        runtime.decode(0, [[0]], 0, 1, 1, valid_tokens_by_group={0: 1})
+        runtime.decompress(0, [[0]], 0, 1, 1, valid_tokens_by_group={0: 1})
 
 
 @dataclass
@@ -399,7 +399,7 @@ def test_encode_into_requires_one_complete_runtime_owned_bank(runtime_type):
     ]
     for output, auxiliary in bad_pairs:
         with pytest.raises(ValueError, match="Runtime-owned bank"):
-            runtime.encode_into(0, [[0]], 0, valid_tokens_by_group={0: 1},
+            runtime.compress_into(0, [[0]], 0, valid_tokens_by_group={0: 1},
                                 output=output, auxiliary=auxiliary)
 
 

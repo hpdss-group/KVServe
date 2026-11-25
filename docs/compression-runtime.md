@@ -120,21 +120,22 @@ runtime = create_runtime(plan, "HND", physical_factor, device)
 runtime.bind_kv_caches(cache_tensors, layer_to_group)
 addresses, lengths = runtime.registered_memory()
 
-encoded = runtime.encode(slot_id, block_ids_by_group, kv_part,
+encoded = runtime.compress(slot_id, block_ids_by_group, kv_part,
                          valid_tokens_by_group=valid_tokens)
 encoded.event.synchronize()  # before the transfer engine reads the payload
 # Transfer payload, runtime.aux_bytes(...) and encoded.raw_tail_bytes.
 # The receiver must use distinct local buffers and the same wire_profile.
-event = receiver.decode(receiver_slot, destination_blocks, kv_part,
+event = receiver.decompress(receiver_slot, destination_blocks, kv_part,
                         encoded.codec_bytes, encoded.u8_bytes,
                         valid_tokens_by_group=valid_tokens)
 event.synchronize()  # before making destination cache visible or returning credit
 ```
 
+API v2 names the operations `compress`, `compress_into` and `decompress`.
+The runtime API version and the persisted Store descriptor version are independent.
 This is a fixed-profile API. Layout and head selection are planned once;
 head orders/signs are initialized once when caches bind. Buffers are bounded,
-preallocated and owned by the runtime. Encode/decode never perform a network
-operation. Callers can register the single pool and address its slot views.
+preallocated and owned by the runtime. Compression and decompression run locally. Callers can register the single pool and address its slot views.
 
 The standard runtime supports dense BF16 HND/LBHNC caches with separate K/V
 views, including different K/V head sizes. Complete blocks enter the selected

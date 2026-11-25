@@ -11,7 +11,7 @@ from .memory import build_memory_plan as _build_memory_plan
 from .representation import ChunkIO
 from .spec import CacheSpec
 
-API_VERSION = 1
+API_VERSION = 2
 
 
 def build_memory_plan(config, *args, **kwargs):

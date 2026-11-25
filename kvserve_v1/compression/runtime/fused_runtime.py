@@ -260,14 +260,14 @@ class FusedCompressionRuntime(CompressionRuntime):
         self.slots[slot].host_indices[0].numpy()[:n] = ids
         return n
 
-    def encode(self, slot_id, logical_ids_by_group, kv_part, *, valid_tokens_by_group):
+    def compress(self, slot_id, logical_ids_by_group, kv_part, *, valid_tokens_by_group):
         self._require_execution('encode')
         slot = self.slots[slot_id]
-        return self.encode_into(slot_id, logical_ids_by_group, kv_part,
+        return self.compress_into(slot_id, logical_ids_by_group, kv_part,
                                 valid_tokens_by_group=valid_tokens_by_group,
                                 output=slot.arena_a, auxiliary=slot.aux)
 
-    def encode_into(self, slot_id, logical_ids_by_group, kv_part, *,
+    def compress_into(self, slot_id, logical_ids_by_group, kv_part, *,
                     valid_tokens_by_group, output, auxiliary):
         self._require_execution('encode')
         if type(slot_id) is not int or not 0 <= slot_id < len(self.slots):
@@ -288,7 +288,7 @@ class FusedCompressionRuntime(CompressionRuntime):
             size = self.geometry.packed_bytes(n)
             aux_dst = 0 if auxiliary.data_ptr() == slot.aux.data_ptr() else auxiliary.data_ptr()
             with torch.cuda.device(self.device):
-                self._plans[slot_id, kv_part].encode(
+                self._plans[slot_id, kv_part].compress(
                     pipe.codec._native_ans, slot.arena_b.data_ptr() + self.layout.u8_base,
                     output.data_ptr(), size, slot.completion_event.cuda_event, n,
                     slot.aux.data_ptr(), aux_dst, aux_bytes if aux_dst else 0,
@@ -302,7 +302,7 @@ class FusedCompressionRuntime(CompressionRuntime):
         finally:
             lock.release()
 
-    def decode(self, slot_id, logical_ids_by_group, kv_part, codec_bytes, u8_bytes, *,
+    def decompress(self, slot_id, logical_ids_by_group, kv_part, codec_bytes, u8_bytes, *,
                valid_tokens_by_group, wire_profile=None):
         self._require_execution('decode')
         if type(slot_id) is not int or not 0 <= slot_id < len(self.slots):
@@ -323,7 +323,7 @@ class FusedCompressionRuntime(CompressionRuntime):
                 raise ValueError('Invalid received fused payload size')
             self._generations[slot_id] += 1
             with torch.cuda.device(self.device):
-                self._plans[slot_id, kv_part].decode(
+                self._plans[slot_id, kv_part].decompress(
                     pipe.codec._native_ans, slot.arena_a.data_ptr(),
                     slot.arena_b.data_ptr() + self.layout.u8_base, u8_bytes,
                     slot.completion_event.cuda_event, n, standard_layout,

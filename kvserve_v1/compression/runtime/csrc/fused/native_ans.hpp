@@ -119,7 +119,7 @@ class NativeANS {
     }
   }
 
-  void encode(uintptr_t source, uintptr_t output, size_t size) {
+  void compress(uintptr_t source, uintptr_t output, size_t size) {
     manager_->compress(reinterpret_cast<const uint8_t*>(source),
                        reinterpret_cast<uint8_t*>(output),
                        compression_.at(size), device_size_);
@@ -127,7 +127,7 @@ class NativeANS {
                             cudaMemcpyDeviceToHost, stream_));
   }
 
-  void decode(uintptr_t source, uintptr_t output, size_t size) {
+  void decompress(uintptr_t source, uintptr_t output, size_t size) {
     manager_->decompress(reinterpret_cast<uint8_t*>(output),
                          reinterpret_cast<const uint8_t*>(source),
                          decompression_.at(size));
