@@ -112,6 +112,10 @@ class ChunkIO:
     def __init__(self, runtime: Any) -> None:
         self.runtime = runtime
 
+    @property
+    def wire_profile(self) -> str:
+        return f"kvserve:{_profile_digest(self.runtime).hex()}"
+
     def plan(
         self,
         slot_id: int,
